@@ -1,15 +1,13 @@
 from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin
-from .models import User, Pharmacy
+from .models import User, Pharmacy, Medicine, Category
 
 class UserAdminCustom(UserAdmin):
-    # Display fields in the admin list view
     list_display = ('email', 'role', 'employee_id', 'is_staff', 'is_superuser')
     list_filter = ('role', 'is_staff', 'is_superuser')
     search_fields = ('email',)
     ordering = ('email',)
 
-    # Customize the form fields for the user
     fieldsets = (
         (None, {'fields': ('email', 'password')}),
         ('Personal Info', {'fields': ('first_name', 'last_name', 'employee_id', 'role')}),
@@ -26,11 +24,22 @@ class UserAdminCustom(UserAdmin):
 class PharmacyAdmin(admin.ModelAdmin):
     list_display = ('pharmacy_name', 'user', 'license_number', 'phone_number', 'address')
     search_fields = ('pharmacy_name', 'license_number', 'phone_number')
-    list_filter = ('user__role',)  # Filter pharmacies by user role (e.g., employee or pharmacy)
-    
-    # Allow quick editing of certain fields directly in the list view
+    list_filter = ('user__role',)
     list_editable = ('phone_number', 'address')
 
-# Register the models with the admin site
+class MedicineAdmin(admin.ModelAdmin):
+    list_display = ('name', 'pharmacy', 'category', 'stock', 'price', 'expiry_date', 'status')
+    list_filter = ('category', 'status', 'pharmacy')
+    search_fields = ('name', 'manufacturer')
+    date_hierarchy = 'expiry_date'
+    readonly_fields = ('status',)  # status is automatically calculated
+
+class CategoryAdmin(admin.ModelAdmin):
+    list_display = ('name', 'description')
+    search_fields = ('name',)
+
+# Register all models
 admin.site.register(User, UserAdminCustom)
 admin.site.register(Pharmacy, PharmacyAdmin)
+admin.site.register(Medicine, MedicineAdmin)
+admin.site.register(Category, CategoryAdmin)

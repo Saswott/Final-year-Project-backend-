@@ -1,0 +1,7 @@
+pip install djangorestframework-simplejwt
+pip install mysqlclient
+pip install django-filter
+pip install django-cors-headers
+python -m pip install Pillow
+
+

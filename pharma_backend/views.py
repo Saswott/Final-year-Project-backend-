@@ -1,5 +1,6 @@
-from django.http import HttpResponse
+from django.http import HttpResponse, HttpResponseForbidden
 
-def home(request):  # Ensure request is an argument
-    return HttpResponse("Hello, world!")
-
+def home(request):
+    if request.headers.get('X-Requested-With') != 'XMLHttpRequest':  # example check
+        return HttpResponseForbidden("Not allowed")
+    return HttpResponse("")
