@@ -3,5 +3,8 @@ pip install mysqlclient
 pip install django-filter
 pip install django-cors-headers
 python -m pip install Pillow
+pip install psycopg2-binary
+pip install reportlab
+pip install xhtml2pdf
 
 
