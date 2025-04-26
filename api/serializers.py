@@ -348,7 +348,6 @@ class MessageSerializer(serializers.ModelSerializer):
         return f"{obj.employee.first_name} {obj.employee.last_name}"
 
 
-# 📩 Message Create Serializer (for sending messages)
 class MessageCreateSerializer(serializers.ModelSerializer):
     class Meta:
         model = Message
@@ -373,3 +372,5 @@ class MessageCreateSerializer(serializers.ModelSerializer):
             pharmacy=request.user.pharmacy,
             message=validated_data['message']
         )
+    
+    

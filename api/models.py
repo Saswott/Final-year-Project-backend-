@@ -286,12 +286,16 @@ class RecentActivity(models.Model):
 
     # message
 
+# In your Message model
 class Message(models.Model):
     employee = models.ForeignKey(User, on_delete=models.CASCADE, related_name='sent_messages')
-    pharmacy = models.ForeignKey(Pharmacy, on_delete=models.CASCADE, related_name='received_messages')
+    pharmacy = models.ForeignKey(
+        Pharmacy, 
+        on_delete=models.CASCADE, 
+        related_name='received_messages',
+        null=True,  # Add this to make optional
+        blank=True  # Add this to allow blank in forms
+    )
     message = models.TextField()
     created_at = models.DateTimeField(auto_now_add=True)
     is_read = models.BooleanField(default=False)
-
-    class Meta:
-        ordering = ['-created_at']

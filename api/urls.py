@@ -2,7 +2,7 @@ from django.urls import path, include
 from rest_framework.routers import DefaultRouter
 from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
 from rest_framework_simplejwt.views import TokenRefreshView
-from .views import CustomTokenObtainPairView
+from .views import AnalyticsPDFView, CustomTokenObtainPairView
 from .views import PrescriptionViewSet
 from .views import InvoiceViewSet
 from .views import InvoicePDFView
@@ -15,7 +15,8 @@ from .views import (
     CategoryViewSet,
     EmployeeRegisterView,
     EmployeeViewSet,
-    RecentActivityView  # Import the RecentActivityView
+    RecentActivityView,  # Import the RecentActivityView
+    AnalyticsView  # Import the AnalyticsView
 )
 
 # Set up viewsets for routing
@@ -46,7 +47,12 @@ urlpatterns = [
     
     # Recent Activity endpoint
     path('recent-activity/', RecentActivityView.as_view(), name='recent-activity'),
-    
+    path('messages/mark_read/<int:pk>/', MessageViewSet.as_view({'patch': 'mark_read'}), name='message-mark-read'),
+    path('messages/unread_count/', MessageViewSet.as_view({'get': 'unread_count'}), name='message-unread-count'),
+
+    path('analytics/', AnalyticsView.as_view(), name='analytics'),
+    path('analytics/download/', AnalyticsPDFView.as_view(), name='analytics-pdf'),
+
     # Router-based endpoints
     path('', include(router.urls)),
 ]
