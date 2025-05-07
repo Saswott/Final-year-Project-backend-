@@ -7,6 +7,7 @@ from .views import PrescriptionViewSet
 from .views import InvoiceViewSet
 from .views import InvoicePDFView
 from .views import MessageViewSet  # Import the MessageViewSet
+from .views import SalesByEmployeeLast7Days
 
 from .views import (
     PharmacyRegisterView,
@@ -52,6 +53,8 @@ urlpatterns = [
 
     path('analytics/', AnalyticsView.as_view(), name='analytics'),
     path('analytics/download/', AnalyticsPDFView.as_view(), name='analytics-pdf'),
+    path('analytics/employee-sales-last-7-days/', SalesByEmployeeLast7Days.as_view(), name='employee-sales-last-7-days'),
+    path('invoices/employee-stats/<int:employee_id>/', InvoiceViewSet.as_view({'get': 'employee_stats'}), name='invoice-employee-stats'),
 
     # Router-based endpoints
     path('', include(router.urls)),

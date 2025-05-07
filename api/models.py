@@ -171,6 +171,15 @@ class Medicine(models.Model):
             self.save()
             return True
         return False
+    
+    @property
+    def invoices(self):
+        """Get all invoices that contain this medicine"""
+        from django.db.models import Q
+        return Invoice.objects.filter(
+            Q(items__contains=[{"name": self.name}]) |
+            Q(items__icontains=f'"name": "{self.name}"')
+        )
 
 # ========================
 # Invoice/Billing Model

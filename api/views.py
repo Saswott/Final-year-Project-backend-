@@ -28,6 +28,25 @@ from datetime import datetime
 from django.db.models import Sum, Count
 from django.utils import timezone
 from datetime import timedelta
+from django.utils import timezone
+from datetime import timedelta
+from collections import defaultdict
+
+
+from rest_framework import generics, status, permissions, viewsets, filters
+from rest_framework.exceptions import PermissionDenied
+from rest_framework.response import Response
+from rest_framework.views import APIView
+from django.db.models import Sum, Count, Q
+from django.utils import timezone
+from datetime import timedelta
+import json
+from .models import User, Medicine, Category, Pharmacy, Prescription, Invoice
+from .serializers import PharmacySerializer, UserSerializer, MedicineSerializer, CategorySerializer
+
+
+
+
 from rest_framework.response import Response
 from .models import User, Medicine, Category, Pharmacy, Prescription, Invoice, RecentActivity, Message
 from .serializers import MessageSerializer, MessageCreateSerializer, RecentActivitySerializer
@@ -64,6 +83,7 @@ class UserMeView(APIView):
     def get(self, request):
         user = request.user
         data = {
+            'id': user.id,
             'email': user.email,
             'first_name': user.first_name,
             'last_name': user.last_name,
@@ -90,16 +110,22 @@ class MedicineViewSet(viewsets.ModelViewSet):
     filterset_fields = ['category', 'status']
     search_fields = ['name', 'manufacturer']
     ordering_fields = ['name', 'price', 'stock', 'expiry_date']
+
     @action(detail=False, methods=['get'])
     def stats(self, request):
         queryset = self.get_queryset()
         three_months_later = timezone.now().date() + timedelta(days=90)
-        expiring_soon = queryset.filter(expiry_date__lte=three_months_later).count()
+
+        category_counts = queryset.values('category__name').annotate(count=Count('id'))
+
+        categorized = {item['category__name'].lower(): item['count'] for item in category_counts}
+
         return Response({
             'total_items': queryset.count(),
             'low_stock': queryset.filter(stock__lte=200).count(),
             'out_of_stock': queryset.filter(stock=0).count(),
-            'expiring_soon': expiring_soon,
+            'expiring_soon': queryset.filter(expiry_date__lte=three_months_later).count(),
+            'categories': categorized  # <- send grouped counts
         })
     
     @action(detail=False, methods=['get'])
@@ -458,7 +484,35 @@ class InvoiceViewSet(viewsets.ModelViewSet):
             'pending': totals['pending_count'] or 0,
             'paid': totals['total_count'] - totals['pending_count']
         })
-    
+        
+    @action(detail=False, methods=['get'], url_path='employee-stats/(?P<employee_id>[^/.]+)')
+    def employee_stats(self, request, employee_id=None):
+        try:
+            employee = User.objects.get(id=employee_id, role='employee')
+        except User.DoesNotExist:
+            return Response({'error': 'Employee not found'}, status=404)
+        today = timezone.now().date()
+        yesterday = today - timedelta(days=1)
+        
+        # Get stats for this specific employee
+        queryset = self.get_queryset().filter(created_by=employee)
+        
+        totals = queryset.aggregate(
+            total_count=Count('id'),
+            total_amount=Sum('total_amount'),
+            today_count=Count('id', filter=models.Q(created_at__date=today)),
+            yesterday_count=Count('id', filter=models.Q(created_at__date=yesterday)),
+            pending_count=Count('id', filter=models.Q(status='Pending'))
+        )
+        
+        return Response({
+            'total': totals['total_count'] or 0,
+            'today': totals['today_count'] or 0,
+            'yesterday': totals['yesterday_count'] or 0,
+            'total_amount': float(totals['total_amount']) if totals['total_amount'] else 0,
+            'pending': totals['pending_count'] or 0,
+            'paid': totals['total_count'] - totals['pending_count']
+        })    
 class InvoicePDFView(APIView):
     def get(self, request, pk):
         try:
@@ -681,10 +735,20 @@ class RecentActivityView(APIView):
                 status=status.HTTP_400_BAD_REQUEST
             )
         
-        # Get recent activities for the pharmacy
+        # Get employee_id from query params if available
+        employee_id = request.query_params.get('employee_id')
+        
+        # Base queryset
         activities = RecentActivity.objects.filter(
             pharmacy=request.user.pharmacy
-        ).order_by('-timestamp')[:50]
+        )
+        
+        # Filter by employee if specified
+        if employee_id:
+            activities = activities.filter(user_id=employee_id)
+            
+        # Order and limit
+        activities = activities.order_by('-timestamp')[:50]
         
         serializer = RecentActivitySerializer(activities, many=True)
         return Response(serializer.data)
@@ -744,6 +808,7 @@ class MessageViewSet(viewsets.ModelViewSet):
 
 # ------------------ ANALYTICS VIEW ------------------
 
+
 class AnalyticsView(APIView):
     permission_classes = [permissions.IsAuthenticated]
     
@@ -755,6 +820,7 @@ class AnalyticsView(APIView):
                 {"error": "User is not associated with a pharmacy"},
                 status=status.HTTP_400_BAD_REQUEST
             )
+
         pharmacy = user.pharmacy
         
         # Calculate date ranges for the last 7 days (including today)
@@ -778,32 +844,81 @@ class AnalyticsView(APIView):
         # 2. Category Distribution Data
         category_data = []
         categories = Category.objects.all()
+        
+        # Initialize category sales
+        category_sales = {category.name: 0 for category in categories}
+        category_sales['Others'] = 0
+        
+        # Get all invoices for the pharmacy
+        invoices = Invoice.objects.filter(pharmacy=pharmacy)
+        
+        # Manually check items in each invoice
+        for invoice in invoices:
+            try:
+                items = json.loads(invoice.items) if isinstance(invoice.items, str) else invoice.items
+                for item in items:
+                    medicine_name = item.get('name', '')
+                    item_total = float(item.get('total', 0))
+                    
+                    # Try to find the medicine to get its category
+                    # Use exact match instead of contains/icontains
+                    medicine = Medicine.objects.filter(name__iexact=medicine_name).first()
+                    
+                    if medicine and medicine.category:
+                        category_sales[medicine.category.name] += item_total
+                    else:
+                        category_sales['Others'] += item_total
+            except Exception as e:
+                print(f"Error processing invoice {invoice.id}: {str(e)}")
+                continue
+        
+        # Calculate percentages
+        total_sales = sum(category_sales.values()) or 1  # Avoid division by zero
         for category in categories:
-            # Get total sales for this category
-            category_sales = Invoice.objects.filter(
-                pharmacy=pharmacy,
-                items__contains=[{"name": category.name}]
-            ).aggregate(total=Sum('total_amount'))['total'] or 0
-            
-            # Calculate percentage (placeholder logic - you might want different calculation)
-            percentage = min(90, max(65, (category_sales / 1000) * 100)) if category_sales > 0 else 0
-            
+            sales = category_sales[category.name]
+            if sales > 0:
+                percentage = min(90, max(65, (sales / total_sales) * 100))
+                category_data.append({
+                    'category': category.name,
+                    'percentage': round(percentage),
+                    'sales': float(sales)
+                })
+        
+        # Add Others category if it has sales
+        if category_sales['Others'] > 0:
+            sales = category_sales['Others']
+            percentage = min(90, max(65, (sales / total_sales) * 100))
             category_data.append({
-                'category': category.name,
+                'category': 'Others',
                 'percentage': round(percentage),
-                'sales': float(category_sales)
+                'sales': float(sales)
             })
         
         # 3. Stats Cards Data
         # Weekly Sales
         weekly_sales = sum(item['value'] for item in weekly_sales_data)
         
-        # Top Medicine
-        top_medicine = Medicine.objects.filter(
-            invoice__pharmacy=pharmacy
-        ).annotate(
-            total_sold=Sum('invoice__items__quantity')
-        ).order_by('-total_sold').first()
+        # Top Medicine - Alternative approach
+        all_medicines = Medicine.objects.all()
+        medicine_sales = {}
+        
+        for medicine in all_medicines:
+            # Find all invoices that contain this medicine
+            total_sold = 0
+            for invoice in Invoice.objects.filter(pharmacy=pharmacy):
+                try:
+                    items = json.loads(invoice.items) if isinstance(invoice.items, str) else invoice.items
+                    for item in items:
+                        if item.get('name', '').lower() == medicine.name.lower():
+                            total_sold += item.get('quantity', 0)
+                except:
+                    continue
+            
+            if total_sold > 0:
+                medicine_sales[medicine.name] = total_sold
+        
+        # Get the top medicine
+        top_medicine_name = max(medicine_sales.items(), key=lambda x: x[1], default=('N/A', 0))
         
         # Frequent Buyer
         frequent_buyer = Invoice.objects.filter(
@@ -823,19 +938,18 @@ class AnalyticsView(APIView):
                     'percentage': 20  # Placeholder for percentage change
                 },
                 'top_medicine': {
-                    'name': top_medicine.name if top_medicine else 'Paracetamol',
-                    'count': top_medicine.total_sold if top_medicine else 5987
+                    'name': top_medicine_name[0],
+                    'count': top_medicine_name[1]
                 },
                 'frequent_buyer': {
-                    'name': frequent_buyer['customer_name'] if frequent_buyer else 'Dr. Smith',
-                    'count': frequent_buyer['count'] if frequent_buyer else 2457
+                    'name': frequent_buyer['customer_name'] if frequent_buyer else 'N/A',
+                    'count': frequent_buyer['count'] if frequent_buyer else 0
                 }
             }
         }
         
-        return Response(response_data)
-    
-# ------------------ PDF GENERATION ------------------
+        return Response(response_data)    
+
 
 class AnalyticsPDFView(APIView):
     permission_classes = [permissions.IsAuthenticated]
@@ -850,9 +964,16 @@ class AnalyticsPDFView(APIView):
             data = analytics_response.data
             
             # Create PDF buffer
+            from io import BytesIO
             buffer = BytesIO()
             
-            # Create the PDF document with custom margins
+            # Create the PDF document
+            from reportlab.lib.pagesizes import letter
+            from reportlab.pdfgen import canvas
+            from reportlab.lib.styles import getSampleStyleSheet
+            from reportlab.platypus import Paragraph, Spacer, Table, TableStyle
+            from reportlab.lib import colors
+            
             doc = SimpleDocTemplate(
                 buffer,
                 pagesize=letter,
@@ -876,20 +997,6 @@ class AnalyticsPDFView(APIView):
                 fontName='Helvetica-Bold'
             ))
             
-            styles.add(ParagraphStyle(
-                name='Header',
-                fontSize=14,
-                spaceAfter=10,
-                textColor=colors.HexColor('#3498db'),
-                fontName='Helvetica-Bold'
-            ))
-            
-            styles.add(ParagraphStyle(
-                name='NormalBold',
-                fontSize=10,
-                fontName='Helvetica-Bold'
-            ))
-            
             # 1. Title
             elements.append(Paragraph("Pharmacy Analytics Report", styles['Title']))
             elements.append(Paragraph(f"Pharmacy: {data['pharmacy_name']}", styles['Normal']))
@@ -897,7 +1004,7 @@ class AnalyticsPDFView(APIView):
             elements.append(Spacer(1, 0.5*inch))
             
             # 2. Key Stats
-            elements.append(Paragraph("Key Statistics", styles['Header']))
+            elements.append(Paragraph("Key Statistics", styles['Heading2']))
             
             stats_data = [
                 ["Weekly Sales", f"₹{data['stats']['weekly_sales']['value']:,.2f}", f"{data['stats']['weekly_sales']['percentage']}%"],
@@ -921,7 +1028,7 @@ class AnalyticsPDFView(APIView):
             elements.append(Spacer(1, 0.5*inch))
             
             # 3. Weekly Sales Chart (as a table)
-            elements.append(Paragraph("Weekly Sales", styles['Header']))
+            elements.append(Paragraph("Weekly Sales", styles['Heading2']))
             
             sales_data = [["Day", "Sales (₹)"]] + [
                 [item['day'], f"{item['value']:,.2f}"] 
@@ -945,7 +1052,7 @@ class AnalyticsPDFView(APIView):
             elements.append(Spacer(1, 0.5*inch))
             
             # 4. Category Distribution
-            elements.append(Paragraph("Medicine Categories Distribution", styles['Header']))
+            elements.append(Paragraph("Medicine Categories Distribution", styles['Heading2']))
             
             category_data = [["Category", "Percentage", "Sales (₹)"]] + [
                 [item['category'], f"{item['percentage']}%", f"{item['sales']:,.2f}"] 
@@ -975,9 +1082,67 @@ class AnalyticsPDFView(APIView):
             buffer.close()
             
             # Create HTTP response
+            from django.http import HttpResponse
             response = HttpResponse(pdf, content_type='application/pdf')
             response['Content-Disposition'] = 'attachment; filename="pharmacy_analytics_report.pdf"'
             return response
             
         except Exception as e:
             return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        
+        
+from rest_framework.views import APIView
+from rest_framework.response import Response
+from rest_framework import permissions, status
+from django.utils import timezone
+from datetime import timedelta
+from collections import defaultdict
+
+from collections import defaultdict
+
+class SalesByEmployeeLast7Days(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        user = request.user
+
+        if not hasattr(user, 'pharmacy'):
+            return Response(
+                {"error": "User is not associated with a pharmacy"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        pharmacy = user.pharmacy
+        today = timezone.now().date()
+        date_range = [today - timedelta(days=i) for i in range(6, -1, -1)]  # Last 7 days
+
+        employee_sales = {}
+        invoices = Invoice.objects.filter(
+            pharmacy=pharmacy,
+            created_at__date__in=date_range
+        )
+
+        for invoice in invoices:
+            invoice_date = invoice.created_at.date()
+            if invoice_date in date_range:
+                index = date_range.index(invoice_date)
+
+                user = invoice.created_by
+                name = user.get_full_name() if user and hasattr(user, 'get_full_name') else str(user) if user else "Unknown"
+                role = getattr(user, 'role', 'Unknown') if user else 'Unknown'
+
+                key = name
+                if key not in employee_sales:
+                    employee_sales[key] = {
+                        "employee": name,
+                        "role": role,
+                        "daily_sales": [0] * 7
+                    }
+
+                employee_sales[key]["daily_sales"][index] += float(invoice.total_amount)
+
+        return Response({
+            "date_labels": [d.strftime('%a') for d in date_range],
+            "sales_by_employee": list(employee_sales.values())
+        })
+

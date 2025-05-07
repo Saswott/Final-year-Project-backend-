@@ -16,11 +16,12 @@ class PharmacySerializer(serializers.ModelSerializer):
 
 # 👤 Basic User Serializer
 class UserSerializer(serializers.ModelSerializer):
+    pharmacy = PharmacySerializer(read_only=True)
     class Meta:
         model = User
         fields = [
             'id', 'email', 'first_name', 'last_name', 'phone_number',
-            'role', 'is_active', 'is_verified', 'date_joined'
+            'role', 'is_active', 'is_verified', 'date_joined', 'age', 'address', 'citizenship_document', 'pharmacy', 'profile_picture'
         ]
         read_only_fields = ['is_active', 'is_verified', 'date_joined']
 
